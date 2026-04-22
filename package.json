@@ -8,11 +8,11 @@
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/duodian/vscode-workspace-manager"
+    "url": "https://github.com/TomHusky/vscode-workspace-manager"
   },
-  "homepage": "https://github.com/duodian/vscode-workspace-manager#readme",
+  "homepage": "https://github.com/TomHusky/vscode-workspace-manager#readme",
   "bugs": {
-    "url": "https://github.com/duodian/vscode-workspace-manager/issues"
+    "url": "https://github.com/TomHusky/vscode-workspace-manager/issues"
   },
   "keywords": [
     "workspace",

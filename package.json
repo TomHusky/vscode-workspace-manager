@@ -1,0 +1,172 @@
+{
+  "name": "vscode-workspace-manager",
+  "displayName": "Workspace Manager",
+  "description": "拖拽文件夹快速生成与管理 VS Code 多根工作区，支持 AI 自动生成描述",
+  "version": "0.1.0",
+  "publisher": "duodian",
+  "license": "MIT",
+  "icon": "resources/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/duodian/vscode-workspace-manager"
+  },
+  "homepage": "https://github.com/duodian/vscode-workspace-manager#readme",
+  "bugs": {
+    "url": "https://github.com/duodian/vscode-workspace-manager/issues"
+  },
+  "keywords": [
+    "workspace",
+    "multi-root",
+    "code-workspace",
+    "ai",
+    "copilot",
+    "工作区"
+  ],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "workspaceManager",
+          "title": "Workspace Manager",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "workspaceManager": [
+        {
+          "type": "webview",
+          "id": "workspaceManager.builderV2",
+          "name": "新建工作区",
+          "icon": "resources/icon.svg",
+          "initialSize": 1
+        },
+        {
+          "id": "workspaceManager.list",
+          "name": "已保存的工作区",
+          "icon": "resources/icon.svg",
+          "initialSize": 4
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "workspaceManager.refresh",
+        "title": "刷新",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "workspaceManager.openItem",
+        "title": "打开工作区",
+        "icon": "$(play)"
+      },
+      {
+        "command": "workspaceManager.openItemNewWindow",
+        "title": "在新窗口打开",
+        "icon": "$(empty-window)"
+      },
+      {
+        "command": "workspaceManager.renameItem",
+        "title": "重命名",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "workspaceManager.editDescription",
+        "title": "编辑描述",
+        "icon": "$(note)"
+      },
+      {
+        "command": "workspaceManager.regenerateDescription",
+        "title": "用 AI 重新生成描述",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "workspaceManager.deleteItem",
+        "title": "删除",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "workspaceManager.revealInFinder",
+        "title": "在 Finder 中显示"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "workspaceManager.refresh",
+          "when": "view == workspaceManager.list",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "workspaceManager.openItemNewWindow",
+          "when": "view == workspaceManager.list && viewItem == workspace",
+          "group": "1_open@1"
+        },
+        {
+          "command": "workspaceManager.regenerateDescription",
+          "when": "view == workspaceManager.list && viewItem == workspace",
+          "group": "1_open@2"
+        },
+        {
+          "command": "workspaceManager.renameItem",
+          "when": "view == workspaceManager.list && viewItem == workspace",
+          "group": "1_modify@1"
+        },
+        {
+          "command": "workspaceManager.editDescription",
+          "when": "view == workspaceManager.list && viewItem == workspace",
+          "group": "1_modify@2"
+        },
+        {
+          "command": "workspaceManager.regenerateDescription",
+          "when": "view == workspaceManager.list && viewItem == workspace",
+          "group": "1_modify@3"
+        },
+        {
+          "command": "workspaceManager.revealInFinder",
+          "when": "view == workspaceManager.list && viewItem == workspace",
+          "group": "2_nav@1"
+        },
+        {
+          "command": "workspaceManager.deleteItem",
+          "when": "view == workspaceManager.list && viewItem == workspace",
+          "group": "9_danger@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Workspace Manager",
+      "properties": {
+        "workspaceManager.storageDir": {
+          "type": "string",
+          "default": "",
+          "description": "保存 .code-workspace 文件的目录，留空则使用 ~/CopilotWorkspaces"
+        },
+        "workspaceManager.openBehavior": {
+          "type": "string",
+          "enum": ["ask", "current", "newWindow"],
+          "default": "ask",
+          "description": "点击工作区时的打开方式"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}

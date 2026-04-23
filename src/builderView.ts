@@ -120,7 +120,7 @@ export class BuilderViewProvider implements vscode.WebviewViewProvider {
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <title>新建工作区</title>
 <style>
-  body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 12px 14px; font-size: var(--vscode-font-size); }
+  body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 12px 14px 18px; font-size: var(--vscode-font-size); }
   h3 { margin: 6px 0 8px; font-size: 11px; text-transform: uppercase; opacity: .7; letter-spacing: .3px; }
   .field { margin-bottom: 12px; }
   label { display: block; margin-bottom: 4px; font-size: 11px; opacity: .85; }

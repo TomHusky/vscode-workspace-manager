@@ -33,12 +33,12 @@ code --install-extension duodian.vscode-workspace-manager
 
 ### 方式二：直接下载 VSIX 安装
 
-1. 下载 [vscode-workspace-manager-0.1.0.vsix](https://github.com/TomHusky/vscode-workspace-manager/raw/main/vscode-workspace-manager-0.1.0.vsix)
+1. 下载 [vscode-workspace-manager-0.1.1.vsix](https://github.com/TomHusky/vscode-workspace-manager/raw/main/vscode-workspace-manager-0.1.1.vsix)
 2. 在 VS Code 中：扩展面板 → 右上角 `...` → **Install from VSIX...** → 选择下载的文件
 3. 或通过命令行：
 
 ```bash
-code --install-extension vscode-workspace-manager-0.1.0.vsix
+code --install-extension vscode-workspace-manager-0.1.1.vsix
 ```
 
 ## 使用

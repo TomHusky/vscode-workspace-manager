@@ -2,7 +2,7 @@
   "name": "vscode-workspace-manager",
   "displayName": "Workspace Manager",
   "description": "拖拽文件夹快速生成与管理 VS Code 多根工作区，支持 AI 自动生成描述",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "duodian",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -45,13 +45,13 @@
           "id": "workspaceManager.builderV2",
           "name": "新建工作区",
           "icon": "resources/icon.svg",
-          "initialSize": 1
+          "initialSize": 3
         },
         {
           "id": "workspaceManager.list",
           "name": "已保存的工作区",
           "icon": "resources/icon.svg",
-          "initialSize": 4
+          "initialSize": 2
         }
       ]
     },

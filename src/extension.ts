@@ -341,9 +341,16 @@ async function restoreCurrentWorkspaceChatBackup(store: WorkspaceStore, context:
   if (!wsFile || wsFile.scheme !== 'file') return;
   const record = store.list().find(r => r.filePath === wsFile.fsPath);
   if (!record?.chatBackupPath) return;
+  const reloadKey = `workspaceManager.chatRestoreReloaded.${record.id}`;
+  const hasReloaded = context.workspaceState.get<boolean>(reloadKey, false);
   const currentStorageDir = getWorkspaceStorageDirFromExtensionStorage(context.storageUri?.fsPath);
   const copied = await restoreChatSessionsBackup(record.chatBackupPath, currentStorageDir).catch(() => 0);
-  if (copied > 0) {
-    vscode.window.showInformationMessage(`已恢复 ${copied} 个 Copilot 会话到当前工作区`);
+  if (copied > 0 || !hasReloaded) {
+    await context.workspaceState.update(reloadKey, true);
+    const message = copied > 0
+      ? `已恢复 ${copied} 个 Copilot 会话，正在重载窗口以刷新会话列表…`
+      : '已检测到 Copilot 会话备份，正在重载窗口以刷新会话列表…';
+    vscode.window.showInformationMessage(message);
+    setTimeout(() => vscode.commands.executeCommand('workbench.action.reloadWindow'), 800);
   }
 }

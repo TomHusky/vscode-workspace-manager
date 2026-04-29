@@ -2,7 +2,16 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import * as childProcess from 'child_process';
 import { pathToFileURL } from 'url';
+
+const CHAT_STATE_BACKUP_FILE = 'chat-state-items.json';
+const CHAT_STATE_KEYS = [
+  'chat.ChatSessionStore.index',
+  'memento/interactive-session',
+  'memento/interactive-session-view-copilot',
+  'GitHub.copilot-chat',
+];
 
 export interface CopilotChatTopic {
   title: string;
@@ -261,6 +270,7 @@ export async function backupRelatedChatSessions(
   let copied = 0;
   for (const sourceDir of sourceDirs) {
     copied += await copyChatStorage(sourceDir, backupDir);
+    await backupChatStateItems(sourceDir, backupDir);
   }
   return copied;
 }
@@ -276,7 +286,9 @@ export async function restoreChatSessionsBackup(
     return 0;
   }
   await fs.mkdir(targetWorkspaceStorageDir, { recursive: true });
-  return copyChatStorage(backupDir, targetWorkspaceStorageDir);
+  const copied = await copyChatStorage(backupDir, targetWorkspaceStorageDir);
+  await restoreChatStateItems(backupDir, targetWorkspaceStorageDir);
+  return copied;
 }
 
 async function copyChatStorage(fromDir: string, toDir: string): Promise<number> {
@@ -314,4 +326,139 @@ async function copyDirFiles(fromDir: string, toDir: string, requiredSuffix?: str
     }
   }
   return copied;
+}
+
+interface ChatStateItem {
+  key: string;
+  value: string;
+}
+
+async function backupChatStateItems(sourceWorkspaceStorageDir: string, backupDir: string) {
+  const dbPath = path.join(sourceWorkspaceStorageDir, 'state.vscdb');
+  const rows = await readChatStateItems(dbPath);
+  if (rows.length === 0) return;
+
+  const backupPath = path.join(backupDir, CHAT_STATE_BACKUP_FILE);
+  let existing: ChatStateItem[] = [];
+  try {
+    existing = JSON.parse(await fs.readFile(backupPath, 'utf8'));
+  } catch {
+    existing = [];
+  }
+
+  const merged = mergeStateItems(existing, rows);
+  await fs.mkdir(backupDir, { recursive: true });
+  await fs.writeFile(backupPath, JSON.stringify(merged, null, 2), 'utf8');
+}
+
+async function restoreChatStateItems(backupDir: string, targetWorkspaceStorageDir: string) {
+  const backupPath = path.join(backupDir, CHAT_STATE_BACKUP_FILE);
+  let rows: ChatStateItem[] = [];
+  try {
+    rows = JSON.parse(await fs.readFile(backupPath, 'utf8'));
+  } catch {
+    return;
+  }
+  if (rows.length === 0) return;
+
+  const dbPath = path.join(targetWorkspaceStorageDir, 'state.vscdb');
+  const existing = await readChatStateItems(dbPath);
+  const merged = mergeStateItems(existing, rows);
+  await writeChatStateItems(dbPath, merged);
+}
+
+function mergeStateItems(base: ChatStateItem[], incoming: ChatStateItem[]): ChatStateItem[] {
+  const byKey = new Map(base.map(item => [item.key, item.value]));
+  for (const item of incoming) {
+    const current = byKey.get(item.key);
+    if (!current) {
+      byKey.set(item.key, item.value);
+      continue;
+    }
+    if (item.key === 'chat.ChatSessionStore.index') {
+      byKey.set(item.key, mergeChatSessionIndex(current, item.value));
+    } else if (item.key === 'memento/interactive-session') {
+      byKey.set(item.key, mergeInteractiveSessionHistory(current, item.value));
+    }
+  }
+  return [...byKey.entries()].map(([key, value]) => ({ key, value }));
+}
+
+function mergeChatSessionIndex(a: string, b: string): string {
+  try {
+    const left = JSON.parse(a);
+    const right = JSON.parse(b);
+    return JSON.stringify({
+      ...left,
+      ...right,
+      entries: { ...(left.entries ?? {}), ...(right.entries ?? {}) },
+      version: Math.max(left.version ?? 1, right.version ?? 1),
+    });
+  } catch {
+    return a || b;
+  }
+}
+
+function mergeInteractiveSessionHistory(a: string, b: string): string {
+  try {
+    const left = JSON.parse(a);
+    const right = JSON.parse(b);
+    const result = { ...left, history: { ...(left.history ?? {}) } };
+    const rightHistory = right.history ?? {};
+    for (const key of Object.keys(rightHistory)) {
+      const leftItems = Array.isArray(result.history[key]) ? result.history[key] : [];
+      const rightItems = Array.isArray(rightHistory[key]) ? rightHistory[key] : [];
+      const seen = new Set(leftItems.map((item: any) => JSON.stringify(item)));
+      result.history[key] = [...leftItems];
+      for (const item of rightItems) {
+        const marker = JSON.stringify(item);
+        if (!seen.has(marker)) result.history[key].push(item);
+      }
+    }
+    return JSON.stringify(result);
+  } catch {
+    return a || b;
+  }
+}
+
+async function readChatStateItems(dbPath: string): Promise<ChatStateItem[]> {
+  try {
+    await fs.access(dbPath);
+  } catch {
+    return [];
+  }
+  const placeholders = CHAT_STATE_KEYS.map(sqlString).join(',');
+  const sql = `select key, value from ItemTable where key in (${placeholders});`;
+  try {
+    const stdout = await execFile('sqlite3', ['-json', dbPath, sql]);
+    return JSON.parse(stdout || '[]');
+  } catch {
+    return [];
+  }
+}
+
+async function writeChatStateItems(dbPath: string, rows: ChatStateItem[]) {
+  if (rows.length === 0) return;
+  try {
+    await fs.access(dbPath);
+  } catch {
+    return;
+  }
+  const statements = rows
+    .map(row => `insert or replace into ItemTable(key, value) values (${sqlString(row.key)}, ${sqlString(row.value)});`)
+    .join('\n');
+  await execFile('sqlite3', [dbPath, `begin;\n${statements}\ncommit;`]).catch(() => undefined);
+}
+
+function sqlString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function execFile(command: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    childProcess.execFile(command, args, { maxBuffer: 10 * 1024 * 1024 }, (error, stdout) => {
+      if (error) reject(error);
+      else resolve(stdout.toString());
+    });
+  });
 }

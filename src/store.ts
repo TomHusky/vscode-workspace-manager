@@ -17,10 +17,12 @@ export interface WorkspaceRecord {
   folders: string[]; // absolute folder paths
   createdAt: number;
   updatedAt: number;
+  deletedAt?: number; // 进入回收站时间
 }
 
 interface StoreShape {
   records: WorkspaceRecord[];
+  deleted?: WorkspaceRecord[];
 }
 
 const STORE_KEY = 'workspaceManager.records.v1';
@@ -46,17 +48,32 @@ export class WorkspaceStore {
     return dir;
   }
 
+  private raw(): StoreShape {
+    return this.context.globalState.get<StoreShape>(STORE_KEY, { records: [], deleted: [] });
+  }
+
   list(): WorkspaceRecord[] {
-    const data = this.context.globalState.get<StoreShape>(STORE_KEY, { records: [] });
-    return [...data.records].sort((a, b) => b.updatedAt - a.updatedAt);
+    return [...this.raw().records].sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  listDeleted(): WorkspaceRecord[] {
+    return [...(this.raw().deleted ?? [])].sort((a, b) => (b.deletedAt ?? 0) - (a.deletedAt ?? 0));
   }
 
   get(id: string): WorkspaceRecord | undefined {
     return this.list().find(r => r.id === id);
   }
 
-  private async save(records: WorkspaceRecord[]) {
-    await this.context.globalState.update(STORE_KEY, { records });
+  getDeleted(id: string): WorkspaceRecord | undefined {
+    return this.listDeleted().find(r => r.id === id);
+  }
+
+  private async save(records: WorkspaceRecord[], deleted?: WorkspaceRecord[]) {
+    const current = this.raw();
+    await this.context.globalState.update(STORE_KEY, {
+      records,
+      deleted: deleted ?? current.deleted ?? [],
+    });
     this._onDidChange.fire();
   }
 
@@ -74,18 +91,44 @@ export class WorkspaceStore {
     await this.save(records);
   }
 
-  async remove(id: string, deleteFile: boolean) {
+  /** 软删除：移到回收站，文件保留 */
+  async softDelete(id: string) {
     const records = this.list();
     const target = records.find(r => r.id === id);
+    if (!target) return;
     const next = records.filter(r => r.id !== id);
-    await this.save(next);
-    if (target && deleteFile) {
-      try {
-        await fs.unlink(target.filePath);
-      } catch {
-        /* ignore */
-      }
+    const deleted = this.listDeleted();
+    deleted.unshift({ ...target, deletedAt: Date.now() });
+    await this.save(next, deleted);
+  }
+
+  /** 从回收站恢复 */
+  async restore(id: string) {
+    const deleted = this.listDeleted();
+    const target = deleted.find(r => r.id === id);
+    if (!target) return;
+    const nextDeleted = deleted.filter(r => r.id !== id);
+    const records = this.list();
+    const { deletedAt, ...rest } = target;
+    records.push({ ...rest, updatedAt: Date.now() });
+    await this.save(records, nextDeleted);
+  }
+
+  /** 彻底删除（来自回收站） */
+  async hardDelete(id: string, deleteFile: boolean) {
+    const deleted = this.listDeleted();
+    const target = deleted.find(r => r.id === id);
+    if (!target) return;
+    const next = deleted.filter(r => r.id !== id);
+    await this.save(this.list(), next);
+    if (deleteFile) {
+      try { await fs.unlink(target.filePath); } catch { /* ignore */ }
     }
+  }
+
+  /** 兼容旧调用：等价于软删除（忽略 deleteFile 参数） */
+  async remove(id: string, _deleteFile: boolean) {
+    await this.softDelete(id);
   }
 
   async createWorkspace(input: {

@@ -2,7 +2,7 @@
   "name": "vscode-workspace-manager",
   "displayName": "Workspace Manager",
   "description": "拖拽文件夹快速生成与管理 VS Code 多根工作区，支持 AI 自动生成描述",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "duodian",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -52,6 +52,13 @@
           "name": "已保存的工作区",
           "icon": "resources/icon.svg",
           "initialSize": 2
+        },
+        {
+          "id": "workspaceManager.recycle",
+          "name": "回收站",
+          "icon": "resources/icon.svg",
+          "initialSize": 1,
+          "visibility": "collapsed"
         }
       ]
     },
@@ -60,6 +67,12 @@
         "command": "workspaceManager.refresh",
         "title": "刷新",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "workspaceManager.saveCurrent",
+        "title": "保存当前工作区",
+        "category": "Workspace Manager",
+        "icon": "$(save)"
       },
       {
         "command": "workspaceManager.openItem",
@@ -92,6 +105,21 @@
         "icon": "$(trash)"
       },
       {
+        "command": "workspaceManager.restoreItem",
+        "title": "恢复",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "workspaceManager.deleteForever",
+        "title": "彻底删除",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "workspaceManager.emptyRecycleBin",
+        "title": "清空回收站",
+        "icon": "$(clear-all)"
+      },
+      {
         "command": "workspaceManager.revealInFinder",
         "title": "在 Finder 中显示"
       }
@@ -99,9 +127,19 @@
     "menus": {
       "view/title": [
         {
+          "command": "workspaceManager.saveCurrent",
+          "when": "view == workspaceManager.list",
+          "group": "navigation@1"
+        },
+        {
           "command": "workspaceManager.refresh",
           "when": "view == workspaceManager.list",
-          "group": "navigation"
+          "group": "navigation@2"
+        },
+        {
+          "command": "workspaceManager.emptyRecycleBin",
+          "when": "view == workspaceManager.recycle",
+          "group": "navigation@1"
         }
       ],
       "view/item/context": [
@@ -138,6 +176,26 @@
         {
           "command": "workspaceManager.deleteItem",
           "when": "view == workspaceManager.list && viewItem == workspace",
+          "group": "9_danger@1"
+        },
+        {
+          "command": "workspaceManager.restoreItem",
+          "when": "view == workspaceManager.recycle && viewItem == deletedWorkspace",
+          "group": "inline@1"
+        },
+        {
+          "command": "workspaceManager.deleteForever",
+          "when": "view == workspaceManager.recycle && viewItem == deletedWorkspace",
+          "group": "inline@2"
+        },
+        {
+          "command": "workspaceManager.restoreItem",
+          "when": "view == workspaceManager.recycle && viewItem == deletedWorkspace",
+          "group": "1_main@1"
+        },
+        {
+          "command": "workspaceManager.deleteForever",
+          "when": "view == workspaceManager.recycle && viewItem == deletedWorkspace",
           "group": "9_danger@1"
         }
       ]

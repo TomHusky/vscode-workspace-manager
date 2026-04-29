@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs/promises';
+import * as path from 'path';
 import { WorkspaceStore, WorkspaceRecord } from './store';
-import { WorkspaceListProvider } from './treeView';
+import { WorkspaceListProvider, RecycleBinProvider } from './treeView';
 import { BuilderViewProvider } from './builderView';
 import { generateDescription, getFoldersGitInfo } from './ai';
 import { showOpenWorkspaceDialog } from './openDialog';
@@ -9,15 +10,20 @@ import { showOpenWorkspaceDialog } from './openDialog';
 export function activate(context: vscode.ExtensionContext) {
   const store = new WorkspaceStore(context);
   const listProvider = new WorkspaceListProvider(store);
+  const recycleProvider = new RecycleBinProvider(store);
   const builderProvider = new BuilderViewProvider(context, store);
 
   const treeView = vscode.window.createTreeView('workspaceManager.list', {
     treeDataProvider: listProvider,
     showCollapseAll: true,
   });
+  const recycleView = vscode.window.createTreeView('workspaceManager.recycle', {
+    treeDataProvider: recycleProvider,
+  });
 
   context.subscriptions.push(
     treeView,
+    recycleView,
     vscode.window.registerWebviewViewProvider(BuilderViewProvider.viewType, builderProvider),
   );
 
@@ -44,6 +50,10 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('workspaceManager.refresh', () => listProvider.refresh()),
+
+    vscode.commands.registerCommand('workspaceManager.saveCurrent', async () => {
+      await saveCurrentWorkspace(store);
+    }),
 
     vscode.commands.registerCommand('workspaceManager.openItem', async (arg: unknown) => {
       const record = await getRecord(arg);
@@ -101,13 +111,50 @@ export function activate(context: vscode.ExtensionContext) {
       const record = await getRecord(arg);
       if (!record) return;
       const choice = await vscode.window.showWarningMessage(
-        `删除工作区记录「${record.name}」？`,
+        `将「${record.name}」移到回收站？`,
         { modal: true },
+        '移入回收站',
+      );
+      if (!choice) return;
+      await store.softDelete(record.id);
+    }),
+
+    vscode.commands.registerCommand('workspaceManager.restoreItem', async (arg: unknown) => {
+      const id = typeof arg === 'string' ? arg : (arg as any)?.id;
+      if (!id) return;
+      await store.restore(id);
+    }),
+
+    vscode.commands.registerCommand('workspaceManager.deleteForever', async (arg: unknown) => {
+      const id = typeof arg === 'string' ? arg : (arg as any)?.id;
+      if (!id) return;
+      const record = store.getDeleted(id);
+      if (!record) return;
+      const choice = await vscode.window.showWarningMessage(
+        `彻底删除「${record.name}」？`,
+        { modal: true, detail: '这个操作不可恢复。可选择是否同时删除本地 .code-workspace 文件。' },
         '仅删除记录',
         '同时删除文件',
       );
       if (!choice) return;
-      await store.remove(record.id, choice === '同时删除文件');
+      await store.hardDelete(id, choice === '同时删除文件');
+    }),
+
+    vscode.commands.registerCommand('workspaceManager.emptyRecycleBin', async () => {
+      const items = store.listDeleted();
+      if (items.length === 0) {
+        vscode.window.showInformationMessage('回收站已空');
+        return;
+      }
+      const choice = await vscode.window.showWarningMessage(
+        `清空回收站（${items.length} 项）？`,
+        { modal: true, detail: '记录全部移除，本地 .code-workspace 文件保留。' },
+        '清空',
+      );
+      if (!choice) return;
+      for (const r of items) {
+        await store.hardDelete(r.id, false);
+      }
     }),
 
     vscode.commands.registerCommand('workspaceManager.revealInFinder', async (arg: unknown) => {
@@ -150,3 +197,80 @@ async function openWorkspaceRecord(
 }
 
 export function deactivate() {}
+
+async function saveCurrentWorkspace(store: WorkspaceStore) {
+  const wsFile = vscode.workspace.workspaceFile;
+  const folders = vscode.workspace.workspaceFolders;
+
+  if (!folders || folders.length === 0) {
+    vscode.window.showInformationMessage('当前没有打开任何文件夹或工作区');
+    return;
+  }
+
+  // 情况 1：当前已经是 .code-workspace 文件
+  if (wsFile && wsFile.scheme === 'file' && wsFile.fsPath.endsWith('.code-workspace')) {
+    const existing = store.list().find(r => r.filePath === wsFile.fsPath);
+    if (existing) {
+      vscode.window.showInformationMessage(`「${existing.name}」已在工作区记录中`);
+      return;
+    }
+    let meta: { name?: string; description?: string } = {};
+    try {
+      const raw = await fs.readFile(wsFile.fsPath, 'utf8');
+      const parsed = JSON.parse(raw);
+      meta = parsed['workspaceManager.meta'] ?? {};
+    } catch {
+      /* ignore */
+    }
+    const defaultName = meta.name || path.basename(wsFile.fsPath, '.code-workspace');
+    const name = await vscode.window.showInputBox({
+      prompt: '为当前工作区起个名字',
+      value: defaultName,
+    });
+    if (!name) return;
+    const description = meta.description ?? '';
+    const folderPaths = folders.map(f => f.uri.fsPath);
+    const record: WorkspaceRecord = {
+      id: cryptoRandomId(),
+      name: name.trim(),
+      description,
+      filePath: wsFile.fsPath,
+      folders: folderPaths,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    await store.add(record);
+    await store.writeWorkspaceFile(record);
+    vscode.window.showInformationMessage(`已保存工作区「${record.name}」`);
+    return;
+  }
+
+  // 情况 2：当前是普通文件夹（单根或临时多根，无 .code-workspace 文件），生成新文件
+  const folderPaths = folders.map(f => f.uri.fsPath);
+  const defaultName = folders.length === 1
+    ? folders[0].name
+    : folders.map(f => f.name).join(' + ');
+  const name = await vscode.window.showInputBox({
+    prompt: '为当前工作区起个名字',
+    value: defaultName,
+  });
+  if (!name) return;
+
+  const record = await store.createWorkspace({
+    name: name.trim(),
+    description: '',
+    folders: folderPaths,
+  });
+  const choice = await vscode.window.showInformationMessage(
+    `已保存工作区「${record.name}」`,
+    '在新窗口打开',
+  );
+  if (choice === '在新窗口打开') {
+    await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(record.filePath), true);
+  }
+}
+
+function cryptoRandomId(): string {
+  // 复用 store 中的 randomUUID 风格
+  return require('crypto').randomUUID();
+}

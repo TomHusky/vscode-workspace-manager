@@ -40,6 +40,9 @@ export class BuilderViewProvider implements vscode.WebviewViewProvider {
           case 'create':
             await this.create(msg.name, msg.description, msg.folders, !!msg.openAfter);
             break;
+          case 'saveCurrent':
+            await vscode.commands.executeCommand('workspaceManager.saveCurrent');
+            break;
         }
       } catch (err: any) {
         webviewView.webview.postMessage({ type: 'error', message: err?.message || String(err) });
@@ -175,9 +178,26 @@ export class BuilderViewProvider implements vscode.WebviewViewProvider {
   .actions { display: flex; gap: 8px; margin-top: 12px; align-items: center; flex-wrap: wrap; }
   .checkbox { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; margin-left: auto; white-space: nowrap; }
   .checkbox input { width: auto; margin: 0; }
+  .save-current {
+    width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;
+    background: transparent; color: var(--vscode-descriptionForeground);
+    border: 1px dashed var(--vscode-input-border, var(--vscode-panel-border));
+    padding: 6px 10px; border-radius: 3px; cursor: pointer;
+    font-family: inherit; font-size: 12px;
+    margin-bottom: 14px; transition: background .15s, color .15s, border-color .15s;
+  }
+  .save-current:hover {
+    background: var(--vscode-list-hoverBackground);
+    color: var(--vscode-foreground);
+    border-color: var(--vscode-focusBorder);
+  }
+  .save-current .icon { font-size: 14px; line-height: 1; opacity: .8; }
 </style>
 </head>
 <body>
+  <button id="saveCurrentBtn" class="save-current" type="button" title="把当前打开的工作区/文件夹保存到记录">
+    <span class="icon">＋</span><span>保存当前工作区</span>
+  </button>
   <h3>1. 添加文件夹</h3>
   <div id="drop" class="drop" role="button" tabindex="0">
     <div class="main">点击或拖拽文件夹到此处</div>
@@ -314,6 +334,10 @@ export class BuilderViewProvider implements vscode.WebviewViewProvider {
     folders = []; invalids.clear();
     nameEl.value = ''; descEl.value = '';
     render();
+  });
+
+  document.getElementById('saveCurrentBtn').addEventListener('click', () => {
+    vscode.postMessage({ type: 'saveCurrent' });
   });
 
   window.addEventListener('message', e => {

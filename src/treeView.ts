@@ -67,3 +67,29 @@ function buildTooltip(record: WorkspaceRecord, gitInfo?: Map<string, FolderGitIn
 function escapeMd(s: string): string {
   return s.replace(/[\\`*_{}\[\]()#+\-.!]/g, m => `\\${m}`);
 }
+
+export class RecycleBinProvider implements vscode.TreeDataProvider<WorkspaceRecord> {
+  private _onDidChangeTreeData = new vscode.EventEmitter<WorkspaceRecord | void>();
+  readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
+
+  constructor(private readonly store: WorkspaceStore) {
+    store.onDidChange(() => this._onDidChangeTreeData.fire());
+  }
+
+  refresh() { this._onDidChangeTreeData.fire(); }
+
+  getTreeItem(record: WorkspaceRecord): vscode.TreeItem {
+    const item = new vscode.TreeItem(record.name, vscode.TreeItemCollapsibleState.None);
+    item.id = record.id;
+    const date = record.deletedAt ? new Date(record.deletedAt).toLocaleString() : '';
+    item.description = date;
+    item.iconPath = new vscode.ThemeIcon('trash');
+    item.contextValue = 'deletedWorkspace';
+    item.tooltip = `${record.name}\n${record.description || ''}\n已删除：${date}\n${record.filePath}`;
+    return item;
+  }
+
+  getChildren(): WorkspaceRecord[] {
+    return this.store.listDeleted();
+  }
+}

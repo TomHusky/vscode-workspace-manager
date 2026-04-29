@@ -6,7 +6,7 @@ import { WorkspaceListProvider, RecycleBinProvider } from './treeView';
 import { BuilderViewProvider } from './builderView';
 import { generateDescription, generateDescriptionFromCopilot, getFoldersGitInfo } from './ai';
 import {
-  backupChatSessionsFromWorkspaceStorage,
+  backupRelatedChatSessions,
   getCopilotChatTopics,
   getWorkspaceStorageDirFromExtensionStorage,
   migrateChatSessionsToWorkspaceFile,
@@ -253,7 +253,7 @@ async function saveCurrentWorkspace(store: WorkspaceStore, context: vscode.Exten
     };
     await store.add(record);
     await store.writeWorkspaceFile(record);
-    const backup = await backupCurrentWorkspaceChats(store, record, currentStorageDir);
+    const backup = await backupCurrentWorkspaceChats(store, record, folderPaths, wsFile.fsPath, currentStorageDir);
     if (backup?.path) await store.update(record.id, { chatBackupPath: backup.path });
     await migrateChatSessionsToWorkspaceFile(
       folderPaths,
@@ -282,7 +282,7 @@ async function saveCurrentWorkspace(store: WorkspaceStore, context: vscode.Exten
     description,
     folders: folderPaths,
   });
-  const backup = await backupCurrentWorkspaceChats(store, record, currentStorageDir);
+  const backup = await backupCurrentWorkspaceChats(store, record, folderPaths, wsFile?.fsPath, currentStorageDir);
   if (backup?.path) await store.update(record.id, { chatBackupPath: backup.path });
 
   // 迁移当前 workspace 的 Copilot 会话到新生成的 .code-workspace 对应的存储目录
@@ -327,11 +327,12 @@ async function tryGenerateCopilotDescription(name: string, wsFilePath: string, f
 async function backupCurrentWorkspaceChats(
   store: WorkspaceStore,
   record: WorkspaceRecord,
+  folders: string[],
+  workspaceFilePath: string | undefined,
   currentStorageDir: string | undefined,
 ): Promise<{ path: string; copied: number } | undefined> {
-  if (!currentStorageDir) return undefined;
   const backupPath = path.join(store.getStorageDir(), '.copilot-chat-backups', record.id);
-  const copied = await backupChatSessionsFromWorkspaceStorage(currentStorageDir, backupPath).catch(() => 0);
+  const copied = await backupRelatedChatSessions(backupPath, folders, workspaceFilePath, currentStorageDir).catch(() => 0);
   return copied > 0 ? { path: backupPath, copied } : undefined;
 }
 

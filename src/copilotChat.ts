@@ -244,6 +244,27 @@ export async function backupChatSessionsFromWorkspaceStorage(
   return copyChatStorage(sourceWorkspaceStorageDir, backupDir);
 }
 
+export async function backupRelatedChatSessions(
+  backupDir: string,
+  sourceFolders: string[],
+  sourceWorkspaceFilePath?: string,
+  currentWorkspaceStorageDir?: string,
+): Promise<number> {
+  const sourceDirs = [
+    currentWorkspaceStorageDir,
+    ...(await findMatchingStorageDirs(sourceWorkspaceFilePath || '', sourceFolders)),
+  ].filter((dir, index, all): dir is string => Boolean(dir) && all.indexOf(dir) === index);
+
+  if (sourceDirs.length === 0) return 0;
+  await fs.mkdir(backupDir, { recursive: true });
+
+  let copied = 0;
+  for (const sourceDir of sourceDirs) {
+    copied += await copyChatStorage(sourceDir, backupDir);
+  }
+  return copied;
+}
+
 export async function restoreChatSessionsBackup(
   backupDir: string | undefined,
   targetWorkspaceStorageDir: string | undefined,

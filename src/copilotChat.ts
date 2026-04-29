@@ -1,6 +1,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
+import * as crypto from 'crypto';
 
 export interface CopilotChatTopic {
   title: string;
@@ -13,7 +14,7 @@ export interface CopilotChatTopic {
 /**
  * 找到 VS Code 用户数据目录中的 workspaceStorage 路径。
  */
-function getWorkspaceStorageDir(): string {
+export function getWorkspaceStorageDir(): string {
   const home = os.homedir();
   if (process.platform === 'darwin') {
     return path.join(home, 'Library', 'Application Support', 'Code', 'User', 'workspaceStorage');
@@ -123,4 +124,91 @@ export async function getCopilotChatTopics(
   // 按时间倒序，截断
   topics.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
   return topics.slice(0, options.maxSessions ?? 20);
+}
+
+/**
+ * 计算 VS Code 给某个 workspace 配置文件分配的 storage 目录名（md5 of file:// URI）。
+ */
+export function computeWorkspaceStorageId(workspaceFilePath: string): string {
+  const uri = toFileUri(workspaceFilePath).toLowerCase();
+  return crypto.createHash('md5').update(uri).digest('hex');
+}
+
+/**
+ * 把当前 workspace 的 chatSessions 迁移（复制）到目标 .code-workspace 对应的存储目录。
+ * 用于「保存当前工作区」后，新生成的 .code-workspace 第一次打开时仍能看到原会话。
+ *
+ * @returns 实际复制的会话文件数量
+ */
+export async function migrateChatSessionsToWorkspaceFile(
+  sourceFolders: string[],
+  sourceWorkspaceFilePath: string | undefined,
+  targetWorkspaceFilePath: string,
+): Promise<number> {
+  // 找当前 workspace 对应的存储目录（按 .code-workspace 或文件夹匹配）
+  const srcDirs = await findMatchingStorageDirs(sourceWorkspaceFilePath || '', sourceFolders);
+  if (srcDirs.length === 0) return 0;
+
+  const root = getWorkspaceStorageDir();
+  const targetId = computeWorkspaceStorageId(targetWorkspaceFilePath);
+  const targetDir = path.join(root, targetId);
+  const targetSessionsDir = path.join(targetDir, 'chatSessions');
+
+  await fs.mkdir(targetSessionsDir, { recursive: true });
+
+  // 写入 workspace.json，让 VS Code 把这个目录认作目标 workspace 的存储
+  const wsJson = path.join(targetDir, 'workspace.json');
+  try {
+    await fs.access(wsJson);
+  } catch {
+    await fs.writeFile(
+      wsJson,
+      JSON.stringify({ configuration: toFileUri(targetWorkspaceFilePath) }, null, 2),
+      'utf8',
+    );
+  }
+
+  let copied = 0;
+  for (const srcDir of srcDirs) {
+    const sessionsDir = path.join(srcDir, 'chatSessions');
+    let files: string[] = [];
+    try {
+      files = (await fs.readdir(sessionsDir)).filter(f => f.endsWith('.jsonl'));
+    } catch {
+      continue;
+    }
+    for (const f of files) {
+      const dest = path.join(targetSessionsDir, f);
+      try {
+        await fs.access(dest);
+        // 已存在，跳过
+      } catch {
+        try {
+          await fs.copyFile(path.join(sessionsDir, f), dest);
+          copied++;
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    // 一并复制 chatEditingSessions（如果有），避免编辑会话状态丢失
+    const editingSrc = path.join(srcDir, 'chatEditingSessions');
+    try {
+      const editingFiles = await fs.readdir(editingSrc);
+      const editingDest = path.join(targetDir, 'chatEditingSessions');
+      await fs.mkdir(editingDest, { recursive: true });
+      for (const f of editingFiles) {
+        const dst = path.join(editingDest, f);
+        try {
+          await fs.access(dst);
+        } catch {
+          try { await fs.copyFile(path.join(editingSrc, f), dst); } catch { /* ignore */ }
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return copied;
 }

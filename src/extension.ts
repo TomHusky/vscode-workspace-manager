@@ -4,7 +4,8 @@ import * as path from 'path';
 import { WorkspaceStore, WorkspaceRecord } from './store';
 import { WorkspaceListProvider, RecycleBinProvider } from './treeView';
 import { BuilderViewProvider } from './builderView';
-import { generateDescription, getFoldersGitInfo } from './ai';
+import { generateDescription, generateDescriptionFromCopilot, getFoldersGitInfo } from './ai';
+import { getCopilotChatTopics, migrateChatSessionsToWorkspaceFile } from './copilotChat';
 import { showOpenWorkspaceDialog } from './openDialog';
 
 export function activate(context: vscode.ExtensionContext) {
@@ -228,8 +229,8 @@ async function saveCurrentWorkspace(store: WorkspaceStore) {
       value: defaultName,
     });
     if (!name) return;
-    const description = meta.description ?? '';
     const folderPaths = folders.map(f => f.uri.fsPath);
+    const description = meta.description || (await tryGenerateCopilotDescription(name.trim(), wsFile.fsPath, folderPaths));
     const record: WorkspaceRecord = {
       id: cryptoRandomId(),
       name: name.trim(),
@@ -256,13 +257,21 @@ async function saveCurrentWorkspace(store: WorkspaceStore) {
   });
   if (!name) return;
 
+  const description = await tryGenerateCopilotDescription(name.trim(), '', folderPaths);
   const record = await store.createWorkspace({
     name: name.trim(),
-    description: '',
+    description,
     folders: folderPaths,
   });
+
+  // 迁移当前 workspace 的 Copilot 会话到新生成的 .code-workspace 对应的存储目录
+  const copied = await migrateChatSessionsToWorkspaceFile(
+    folderPaths,
+    wsFile?.fsPath,
+    record.filePath,
+  ).catch(() => 0);
   const choice = await vscode.window.showInformationMessage(
-    `已保存工作区「${record.name}」`,
+    `已保存工作区「${record.name}」${copied > 0 ? `，已迁移 ${copied} 个 Copilot 会话` : ''}`,
     '在新窗口打开',
   );
   if (choice === '在新窗口打开') {
@@ -273,4 +282,22 @@ async function saveCurrentWorkspace(store: WorkspaceStore) {
 function cryptoRandomId(): string {
   // 复用 store 中的 randomUUID 风格
   return require('crypto').randomUUID();
+}
+
+async function tryGenerateCopilotDescription(name: string, wsFilePath: string, folders: string[]): Promise<string> {
+  try {
+    return await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: '读取 Copilot 会话并生成描述…' },
+      async () => {
+        const topics = await getCopilotChatTopics(wsFilePath, folders, { maxSessions: 20 });
+        if (topics.length === 0) {
+          // 没有 Copilot 会话，退回使用 git 信息生成
+          return await generateDescription({ name, folders });
+        }
+        return await generateDescriptionFromCopilot({ name, folders, topics });
+      },
+    );
+  } catch {
+    return '';
+  }
 }

@@ -5,7 +5,13 @@ import { WorkspaceStore, WorkspaceRecord } from './store';
 import { WorkspaceListProvider, RecycleBinProvider } from './treeView';
 import { BuilderViewProvider } from './builderView';
 import { generateDescription, generateDescriptionFromCopilot, getFoldersGitInfo } from './ai';
-import { getCopilotChatTopics, migrateChatSessionsToWorkspaceFile } from './copilotChat';
+import {
+  backupChatSessionsFromWorkspaceStorage,
+  getCopilotChatTopics,
+  getWorkspaceStorageDirFromExtensionStorage,
+  migrateChatSessionsToWorkspaceFile,
+  restoreChatSessionsBackup,
+} from './copilotChat';
 import { showOpenWorkspaceDialog } from './openDialog';
 
 export function activate(context: vscode.ExtensionContext) {
@@ -13,6 +19,10 @@ export function activate(context: vscode.ExtensionContext) {
   const listProvider = new WorkspaceListProvider(store);
   const recycleProvider = new RecycleBinProvider(store);
   const builderProvider = new BuilderViewProvider(context, store);
+
+  restoreCurrentWorkspaceChatBackup(store, context);
+  setTimeout(() => restoreCurrentWorkspaceChatBackup(store, context), 1200);
+  setTimeout(() => restoreCurrentWorkspaceChatBackup(store, context), 3500);
 
   const treeView = vscode.window.createTreeView('workspaceManager.list', {
     treeDataProvider: listProvider,
@@ -53,7 +63,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('workspaceManager.refresh', () => listProvider.refresh()),
 
     vscode.commands.registerCommand('workspaceManager.saveCurrent', async () => {
-      await saveCurrentWorkspace(store);
+      await saveCurrentWorkspace(store, context);
     }),
 
     vscode.commands.registerCommand('workspaceManager.openItem', async (arg: unknown) => {
@@ -199,9 +209,10 @@ async function openWorkspaceRecord(
 
 export function deactivate() {}
 
-async function saveCurrentWorkspace(store: WorkspaceStore) {
+async function saveCurrentWorkspace(store: WorkspaceStore, context: vscode.ExtensionContext) {
   const wsFile = vscode.workspace.workspaceFile;
   const folders = vscode.workspace.workspaceFolders;
+  const currentStorageDir = getWorkspaceStorageDirFromExtensionStorage(context.storageUri?.fsPath);
 
   if (!folders || folders.length === 0) {
     vscode.window.showInformationMessage('当前没有打开任何文件夹或工作区');
@@ -242,7 +253,15 @@ async function saveCurrentWorkspace(store: WorkspaceStore) {
     };
     await store.add(record);
     await store.writeWorkspaceFile(record);
-    vscode.window.showInformationMessage(`已保存工作区「${record.name}」`);
+    const backup = await backupCurrentWorkspaceChats(store, record, currentStorageDir);
+    if (backup?.path) await store.update(record.id, { chatBackupPath: backup.path });
+    await migrateChatSessionsToWorkspaceFile(
+      folderPaths,
+      wsFile.fsPath,
+      record.filePath,
+      currentStorageDir,
+    ).catch(() => 0);
+    vscode.window.showInformationMessage(`已保存工作区「${record.name}」${backup && backup.copied > 0 ? `，已备份 ${backup.copied} 个 Copilot 会话` : ''}`);
     return;
   }
 
@@ -263,15 +282,18 @@ async function saveCurrentWorkspace(store: WorkspaceStore) {
     description,
     folders: folderPaths,
   });
+  const backup = await backupCurrentWorkspaceChats(store, record, currentStorageDir);
+  if (backup?.path) await store.update(record.id, { chatBackupPath: backup.path });
 
   // 迁移当前 workspace 的 Copilot 会话到新生成的 .code-workspace 对应的存储目录
-  const copied = await migrateChatSessionsToWorkspaceFile(
+  await migrateChatSessionsToWorkspaceFile(
     folderPaths,
     wsFile?.fsPath,
     record.filePath,
+    currentStorageDir,
   ).catch(() => 0);
   const choice = await vscode.window.showInformationMessage(
-    `已保存工作区「${record.name}」${copied > 0 ? `，已迁移 ${copied} 个 Copilot 会话` : ''}`,
+    `已保存工作区「${record.name}」${backup && backup.copied > 0 ? `，已备份 ${backup.copied} 个 Copilot 会话` : ''}`,
     '在新窗口打开',
   );
   if (choice === '在新窗口打开') {
@@ -299,5 +321,28 @@ async function tryGenerateCopilotDescription(name: string, wsFilePath: string, f
     );
   } catch {
     return '';
+  }
+}
+
+async function backupCurrentWorkspaceChats(
+  store: WorkspaceStore,
+  record: WorkspaceRecord,
+  currentStorageDir: string | undefined,
+): Promise<{ path: string; copied: number } | undefined> {
+  if (!currentStorageDir) return undefined;
+  const backupPath = path.join(store.getStorageDir(), '.copilot-chat-backups', record.id);
+  const copied = await backupChatSessionsFromWorkspaceStorage(currentStorageDir, backupPath).catch(() => 0);
+  return copied > 0 ? { path: backupPath, copied } : undefined;
+}
+
+async function restoreCurrentWorkspaceChatBackup(store: WorkspaceStore, context: vscode.ExtensionContext) {
+  const wsFile = vscode.workspace.workspaceFile;
+  if (!wsFile || wsFile.scheme !== 'file') return;
+  const record = store.list().find(r => r.filePath === wsFile.fsPath);
+  if (!record?.chatBackupPath) return;
+  const currentStorageDir = getWorkspaceStorageDirFromExtensionStorage(context.storageUri?.fsPath);
+  const copied = await restoreChatSessionsBackup(record.chatBackupPath, currentStorageDir).catch(() => 0);
+  if (copied > 0) {
+    vscode.window.showInformationMessage(`已恢复 ${copied} 个 Copilot 会话到当前工作区`);
   }
 }

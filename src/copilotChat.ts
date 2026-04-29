@@ -2,6 +2,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import { pathToFileURL } from 'url';
 
 export interface CopilotChatTopic {
   title: string;
@@ -26,9 +27,15 @@ export function getWorkspaceStorageDir(): string {
 }
 
 function toFileUri(p: string): string {
-  // 转成 file:// URI（与 workspace.json 中的字段格式对齐）
-  const normalized = p.replace(/\\/g, '/');
-  return 'file://' + (normalized.startsWith('/') ? normalized : '/' + normalized);
+  return pathToFileURL(p).toString();
+}
+
+function normalizeUriForCompare(uri: string): string {
+  try {
+    return decodeURI(uri).toLowerCase();
+  } catch {
+    return uri.toLowerCase();
+  }
 }
 
 /**
@@ -43,8 +50,8 @@ async function findMatchingStorageDirs(workspaceFilePath: string, folders: strin
     return [];
   }
 
-  const targetWsUri = toFileUri(workspaceFilePath).toLowerCase();
-  const folderUris = new Set(folders.map(f => toFileUri(f).toLowerCase()));
+  const targetWsUri = workspaceFilePath ? normalizeUriForCompare(toFileUri(workspaceFilePath)) : '';
+  const folderUris = new Set(folders.map(f => normalizeUriForCompare(toFileUri(f))));
 
   const matches: string[] = [];
   await Promise.all(
@@ -53,9 +60,9 @@ async function findMatchingStorageDirs(workspaceFilePath: string, folders: strin
       try {
         const raw = await fs.readFile(path.join(dir, 'workspace.json'), 'utf8');
         const data = JSON.parse(raw);
-        const config = (data.configuration || '').toString().toLowerCase();
-        const folder = (data.folder || '').toString().toLowerCase();
-        if (config === targetWsUri) {
+        const workspace = normalizeUriForCompare((data.workspace || data.configuration || '').toString());
+        const folder = normalizeUriForCompare((data.folder || '').toString());
+        if (targetWsUri && workspace === targetWsUri) {
           matches.push(dir);
           return;
         }
@@ -130,8 +137,19 @@ export async function getCopilotChatTopics(
  * 计算 VS Code 给某个 workspace 配置文件分配的 storage 目录名（md5 of file:// URI）。
  */
 export function computeWorkspaceStorageId(workspaceFilePath: string): string {
-  const uri = toFileUri(workspaceFilePath).toLowerCase();
+  const uri = toFileUri(workspaceFilePath);
   return crypto.createHash('md5').update(uri).digest('hex');
+}
+
+export function getWorkspaceStorageDirFromExtensionStorage(extensionStoragePath: string | undefined): string | undefined {
+  if (!extensionStoragePath) return undefined;
+  const root = getWorkspaceStorageDir();
+  let current = extensionStoragePath;
+  while (current && current !== path.dirname(current)) {
+    if (path.dirname(current) === root) return current;
+    current = path.dirname(current);
+  }
+  return undefined;
 }
 
 /**
@@ -144,9 +162,13 @@ export async function migrateChatSessionsToWorkspaceFile(
   sourceFolders: string[],
   sourceWorkspaceFilePath: string | undefined,
   targetWorkspaceFilePath: string,
+  sourceWorkspaceStorageDir?: string,
 ): Promise<number> {
   // 找当前 workspace 对应的存储目录（按 .code-workspace 或文件夹匹配）
-  const srcDirs = await findMatchingStorageDirs(sourceWorkspaceFilePath || '', sourceFolders);
+  const srcDirs = [
+    sourceWorkspaceStorageDir,
+    ...(await findMatchingStorageDirs(sourceWorkspaceFilePath || '', sourceFolders)),
+  ].filter((dir, index, all): dir is string => Boolean(dir) && all.indexOf(dir) === index);
   if (srcDirs.length === 0) return 0;
 
   const root = getWorkspaceStorageDir();
@@ -163,7 +185,7 @@ export async function migrateChatSessionsToWorkspaceFile(
   } catch {
     await fs.writeFile(
       wsJson,
-      JSON.stringify({ configuration: toFileUri(targetWorkspaceFilePath) }, null, 2),
+      JSON.stringify({ workspace: toFileUri(targetWorkspaceFilePath) }, null, 2),
       'utf8',
     );
   }
@@ -208,6 +230,66 @@ export async function migrateChatSessionsToWorkspaceFile(
       }
     } catch {
       /* ignore */
+    }
+  }
+  return copied;
+}
+
+export async function backupChatSessionsFromWorkspaceStorage(
+  sourceWorkspaceStorageDir: string | undefined,
+  backupDir: string,
+): Promise<number> {
+  if (!sourceWorkspaceStorageDir) return 0;
+  await fs.mkdir(backupDir, { recursive: true });
+  return copyChatStorage(sourceWorkspaceStorageDir, backupDir);
+}
+
+export async function restoreChatSessionsBackup(
+  backupDir: string | undefined,
+  targetWorkspaceStorageDir: string | undefined,
+): Promise<number> {
+  if (!backupDir || !targetWorkspaceStorageDir) return 0;
+  try {
+    await fs.access(backupDir);
+  } catch {
+    return 0;
+  }
+  await fs.mkdir(targetWorkspaceStorageDir, { recursive: true });
+  return copyChatStorage(backupDir, targetWorkspaceStorageDir);
+}
+
+async function copyChatStorage(fromDir: string, toDir: string): Promise<number> {
+  let copied = 0;
+  copied += await copyDirFiles(path.join(fromDir, 'chatSessions'), path.join(toDir, 'chatSessions'), '.jsonl');
+  await copyDirFiles(path.join(fromDir, 'chatEditingSessions'), path.join(toDir, 'chatEditingSessions'));
+  return copied;
+}
+
+async function copyDirFiles(fromDir: string, toDir: string, requiredSuffix?: string): Promise<number> {
+  let files: string[] = [];
+  try {
+    files = await fs.readdir(fromDir);
+  } catch {
+    return 0;
+  }
+  await fs.mkdir(toDir, { recursive: true });
+  let copied = 0;
+  for (const file of files) {
+    if (requiredSuffix && !file.endsWith(requiredSuffix)) continue;
+    const from = path.join(fromDir, file);
+    const to = path.join(toDir, file);
+    try {
+      const stat = await fs.stat(from);
+      if (!stat.isFile()) continue;
+      await fs.access(to);
+    } catch (err: any) {
+      if (err?.code !== 'ENOENT') continue;
+      try {
+        await fs.copyFile(from, to);
+        copied++;
+      } catch {
+        /* ignore */
+      }
     }
   }
   return copied;

@@ -18,6 +18,7 @@ export interface WorkspaceRecord {
   createdAt: number;
   updatedAt: number;
   deletedAt?: number; // 进入回收站时间
+  chatBackupPath?: string; // Copilot Chat 会话备份目录
 }
 
 interface StoreShape {
